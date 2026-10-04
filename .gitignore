@@ -1,0 +1,8 @@
+.venv/
+.venv-web/
+__pycache__/
+logs/
+.env
+.env.*
+*.log
+.local/
