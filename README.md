@@ -1,3 +1,4 @@
+
 # Neo Desk — personal F&O dashboard
 
 Run in WSL:
@@ -90,3 +91,7 @@ PLAYWRIGHT_BROWSERS_PATH=/mnt/d/Stock_market/.local/browsers .venv-web/bin/pytho
 ```
 
 Browser checks use mocked data and an isolated browser; they never log into Kotak or read real account data. Live fee estimates still require an authenticated refresh and comparison with the contract note.
+
+# kotak_neo_api
+I have used the api from the kotak neo application for trading.
+8b555c31f80938aff0e2c467b5b6934083a77026
