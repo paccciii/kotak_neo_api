@@ -1,6 +1,8 @@
 
 # Neo Desk — personal F&O dashboard
 
+For coding agents and future development sessions, read [`AGENTS.md`](AGENTS.md) first. It is the canonical project handoff covering architecture, safety invariants, setup, current capabilities, limitations, and next work.
+
 Run in WSL:
 
 ```bash
