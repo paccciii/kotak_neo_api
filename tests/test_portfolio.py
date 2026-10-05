@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import Mock
-from portfolio import PortfolioError, dashboard, holding_rows, position_row, position_rows, records, broker_time, order_rows
+from portfolio import PortfolioError, dashboard, holding_rows, position_row, position_rows, records, broker_time, order_rows, IndexFeed
 
 
 def raw(**changes):
@@ -13,6 +13,19 @@ def raw(**changes):
 
 
 class PortfolioTests(unittest.TestCase):
+    def test_index_feed_snapshot_is_unavailable_until_broker_update(self):
+        result = IndexFeed().snapshot()
+        self.assertEqual([r['name'] for r in result['indices']], ['NIFTY 50', 'SENSEX'])
+        self.assertTrue(all('error' in r for r in result['indices']))
+
+    def test_index_feed_snapshot_exposes_received_values(self):
+        feed = IndexFeed()
+        feed._latest[('nse_cm', '26000')] = {'value': 22500.25, 'change': -50.5, 'percent': -.22,
+                                                    'broker_updated': '2026-10-04T15:30:00+05:30', 'received_at': '2026-10-04T15:30:01+05:30'}
+        result = feed.snapshot()
+        self.assertEqual(result['indices'][0]['value'], 22500.25)
+        self.assertIn('error', result['indices'][1])
+
     def test_order_dates_sort_and_keep_rejected_orders_distinct(self):
         response = {'data': [
             {'ordEntTm': '01-Oct-2026 12:20:03', 'trnsTp': 'B', 'fldQty': 65, 'qty': 65, 'avgPrc': '171.20', 'ordSt': 'complete'},

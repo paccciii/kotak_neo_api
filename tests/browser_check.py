@@ -37,6 +37,10 @@ with sync_playwright() as p:
             request.fulfill(json={'connected': True})
         elif path == '/api/dashboard':
             request.fulfill(json=SNAPSHOT)
+        elif path == '/api/indices':
+            request.fulfill(json={'fetched_at': '2026-10-01T20:00:00+05:30', 'indices': [
+                {'name': 'NIFTY 50', 'value': 22500.25, 'change': -50.5, 'percent': -0.22, 'broker_updated': '2026-10-01T19:59:59+05:30'},
+                {'name': 'SENSEX', 'value': 74000, 'change': 100, 'percent': 0.14, 'broker_updated': '2026-10-01T19:59:59+05:30'}]})
         else:
             request.fulfill(status=404, json={'error': 'Mock endpoint not provided'})
 
@@ -44,11 +48,18 @@ with sync_playwright() as p:
     page.goto('http://neo.test/')
     page.wait_for_function("document.getElementById('loginHelp').textContent.includes('saved login')")
     assert page.locator('#manualLogin').is_hidden()
+    page.locator('#tradeSegment').select_option('bse_fo')
+    assert page.locator('#tradeSymbol').input_value() == 'SENSEX'
+    page.locator('#tradeSegment').select_option('nse_fo')
+    assert page.locator('#tradeSymbol').input_value() == 'NIFTY'
     page.locator('[name=totp]').fill('123456')
     page.locator('#connect').click()
     page.wait_for_function("document.getElementById('netPnl').textContent.includes('42.75')")
+    page.wait_for_function("document.getElementById('niftyValue').textContent.includes('22,500.25')")
     assert login_bodies == [{'totp': '123456', 'use_saved': True}]
     assert '107.25' in page.locator('#grossPnl').inner_text()
+    assert '-50.50' in page.locator('#niftyChange').inner_text()
+    assert '+100.00' in page.locator('#sensexChange').inner_text()
     assert page.locator('#historyNet').inner_text() == '—'
     assert page.locator('#lifetimeNet').inner_text() == 'Not verified'
     page.locator('#orderDate').fill('2026-09-01')

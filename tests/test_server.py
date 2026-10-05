@@ -38,6 +38,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_private_data_requires_session(self):
         self.assertEqual(self.request('GET', '/api/dashboard')[0], 401)
+        self.assertEqual(self.request('GET', '/api/indices')[0], 401)
 
     def test_trading_requires_authentication_and_same_origin(self):
         headers = {'Origin': f'http://127.0.0.1:{self.app.server_port}', 'X-Neo-Request': '1'}

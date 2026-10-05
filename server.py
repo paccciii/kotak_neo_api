@@ -6,7 +6,7 @@ import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from portfolio import dashboard
+from portfolio import dashboard, IndexFeed
 import accounting
 import trading
 
@@ -53,6 +53,7 @@ class App(HTTPServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.contracts = {}
+        self.index_feed = IndexFeed()
 
     def get_request(self):
         connection, address = super().get_request()
@@ -61,6 +62,7 @@ class App(HTTPServer):
 
     def disconnect(self):
         client, self.client = self.client, None
+        self.index_feed.stop()
         self.session = None
         self.expires = 0
         self.account = None
@@ -132,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, result)
             except Exception:
                 return self.reply(502, {'error': 'Trading report unavailable. Previously submitted orders may still be active; check Kotak.'})
+        if self.path == '/api/indices':
+            if not self.authenticated():
+                return self.reply(401, {'error': 'Please connect your account again.'})
+            return self.reply(200, self.server.index_feed.snapshot())
         if self.path == '/api/history':
             if not self.authenticated():
                 return self.reply(401, {'error': 'Please connect your account again.'})
@@ -266,6 +272,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.account = data['ucc'].strip()
             self.server.session = secrets.token_urlsafe(32)
             self.server.expires = time.monotonic() + TTL
+            self.server.index_feed.start(client)
             if trading.config().get('ip'):
                 try:
                     login_ip_after = trading.public_ip()

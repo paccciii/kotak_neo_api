@@ -1,6 +1,8 @@
 """Adapters for raw Neo 3.0.7 portfolio responses; no account data is logged."""
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone, timedelta
+import asyncio
+import threading
 import time
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -85,6 +87,90 @@ def pick(row, *keys):
         if row.get(key) is not None and row[key] != '':
             return row[key]
     return None
+
+
+def _quote_time(value):
+    try:
+        stamp = float(value)
+        if stamp > 100000000000:
+            stamp /= 1000
+        return datetime.fromtimestamp(stamp, timezone.utc).astimezone(IST).isoformat(timespec='seconds')
+    except (TypeError, ValueError, OverflowError):
+        return broker_time(value)
+class IndexFeed:
+    """Background Kotak SFeed subscription for cash-index messages."""
+    TOKENS = (('NIFTY 50', 'nse_cm', '26000'), ('SENSEX', 'bse_cm', '1'))
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+        self._latest = {}
+        self._error = None
+
+    def start(self, client):
+        self.stop()
+        with self._lock:
+            self._latest = {}
+            self._error = None
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, args=(client,), daemon=True,
+                                        name='neo-index-feed')
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        thread, self._thread = self._thread, None
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=3)
+
+    def _run(self, client):
+        try:
+            asyncio.run(self._listen(client))
+        except Exception:
+            with self._lock:
+                self._error = 'Kotak index stream is unavailable. Reconnect or try during market hours.'
+
+    async def _listen(self, client):
+        from neo_api_client.websocket.feed import WsToken, SFeedIndex
+        tokens = [WsToken(segment, token) for _, segment, token in self.TOKENS]
+        async with client.create_websocket(max_reconnect_attempts=5,
+                                           max_connect_retries=3) as websocket:
+            await websocket.subscribe_index(tokens)
+            iterator = websocket.__aiter__()
+            while not self._stop.is_set():
+                try:
+                    message = await asyncio.wait_for(iterator.__anext__(), timeout=2)
+                except asyncio.TimeoutError:
+                    continue
+                except StopAsyncIteration:
+                    break
+                if not isinstance(message, SFeedIndex):
+                    continue
+                key = (message.exchange_segment, str(message.instrument_token))
+                with self._lock:
+                    self._latest[key] = {
+                        'value': float(message.last_traded_price),
+                        'change': float(message.change),
+                        'percent': float(message.net_change_percent),
+                        'broker_updated': _quote_time(message.last_trade_time),
+                        'received_at': datetime.now(IST).isoformat(timespec='seconds'),
+                    }
+                    self._error = None
+
+    def snapshot(self):
+        with self._lock:
+            latest, error = dict(self._latest), self._error
+        output = []
+        for name, segment, token in self.TOKENS:
+            item = latest.get((segment, token))
+            if item:
+                output.append({'name': name, **item})
+            else:
+                output.append({'name': name, 'error': error or
+                               'Waiting for a Kotak index-stream update; the market may be closed.'})
+        return {'indices': output, 'fetched_at': datetime.now(IST).isoformat(timespec='seconds'),
+                'source': 'Kotak SFeed index stream'}
 
 
 def holding_rows(response):

@@ -10,6 +10,8 @@ cd /mnt/d/Stock_market
 
 Open http://localhost:8000. Ctrl+C stops the server. For a fresh installation, create `.venv-web` with `python3 -m venv .venv-web` and install `requirements.txt` first.
 
+The top market strip displays NIFTY 50 (`nse_cm|26000`) and SENSEX (`bse_cm|1`) through Kotak's authenticated SFeed `subscribeIndices` stream, including point/percentage change, broker update time and local fetch time. The browser reads the latest received snapshot every five seconds while visible. Kotak's REST quote endpoint rejects these index tokens, so it is not used. The app never substitutes an ETF, future or option premium. If Kotak sends no snapshot outside market hours, the cards stay unavailable and say they are waiting for an index-stream update.
+
 ## Saved login
 
 Consumer key, mobile, UCC and MPIN are saved in `.local/credentials.json`, at the user's request. This file contains plaintext credentials, is excluded from Git, and has Windows file permissions restricted to the desktop user and the editing account. It is never served by the web server. Do not share or commit the `.local` folder. TOTP must be entered each login and is never persisted. The browser receives only a saved-login boolean, not the stored values. Sessions last 30 minutes. Disconnect clears the active broker session, not the saved login. Edit/delete the credentials file locally to update/remove saved credentials.
@@ -18,7 +20,7 @@ Loopback-only, single-user application; do not expose it to the internet. Manual
 
 ## Manual F&O orders
 
-Use **Manual F&O orders** to search NSE/BSE contracts by underlying, type, optional expiry and strike. Select the exact returned contract. Lot size, expiry, tick size and freeze quantity come from Kotak's scrip master; browser-supplied symbols and quantities are not trusted. This version supports regular DAY limit and stop-limit orders with NRML/MIS, subject to broker eligibility. No market orders, AMO, baskets, automatic splitting, bracket/target strategy or automatic retries.
+Use **Manual F&O orders** to search NSE/BSE contracts by underlying, type, optional expiry and strike. The ticket includes NIFTY (NSE F&O) and SENSEX (BSE F&O) presets, while still allowing other broker-supported underlyings. Select the exact returned contract. Lot size, expiry, tick size and freeze quantity come from Kotak's scrip master; browser-supplied symbols and quantities are not trusted. This version supports regular DAY limit and stop-limit orders with NRML/MIS, subject to broker eligibility. No market orders, AMO, baskets, automatic splitting, bracket/target strategy or automatic retries.
 
 1. Search and select the contract; fetch a quote snapshot with bid/ask and broker/fetch timestamps.
 2. Enter side, product, lots, limit and optional trigger. Review calls Kotak margin validation without submitting an order.
