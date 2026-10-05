@@ -317,6 +317,8 @@ def confirm(client, account, session, body, login_ip):
     assert_ready(login_ip)
     payload = json.loads(row[5])
     p, c, action = payload['params'], payload['contract'], row[4]
+    from managed import manual_guard
+    manual_guard(account, c)
     if datetime.fromisoformat(c['expiry']).date() < now().date():
         raise ValueError('Contract expired.')
     if action in ('modify', 'cancel'):

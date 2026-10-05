@@ -24,10 +24,12 @@ with sync_playwright() as p:
         path = request.request.url.split('http://neo.test')[-1]
         if path == '/':
             request.fulfill(body=(ROOT / 'index.html').read_text(), content_type='text/html')
-        elif path in ('/app.js', '/trading.js'):
+        elif path in ('/app.js', '/trading.js', '/managed.js'):
             request.fulfill(body=(ROOT / path[1:]).read_text(), content_type='text/javascript')
         elif path == '/api/trading/status':
             request.fulfill(json={'ready': False})
+        elif path == '/api/managed/status':
+            request.fulfill(json={'strategies': []})
         elif path == '/api/trading/tracking':
             request.fulfill(json={'orders': [], 'intents': [], 'positions': [], 'fetched_at': '2026-10-01T20:00:00+05:30'})
         elif path == '/api/status':

@@ -6,11 +6,11 @@ For coding agents and future development sessions, read [`AGENTS.md`](AGENTS.md)
 Run in WSL:
 
 ```bash
-cd /mnt/d/Stock_market
+cd /mnt/d/Stock_trading
 .venv-web/bin/python server.py
 ```
 
-Open http://localhost:8000. Ctrl+C stops the server. For a fresh installation, create `.venv-web` with `python3 -m venv .venv-web` and install `requirements.txt` first.
+Open http://localhost:18765. Ctrl+C stops the server. For a fresh installation, create `.venv-web` with `python3 -m venv .venv-web` and install `requirements.txt` first.
 
 The top market strip displays NIFTY 50 (`nse_cm|26000`) and SENSEX (`bse_cm|1`) through Kotak's authenticated SFeed `subscribeIndices` stream, including point/percentage change, broker update time and local fetch time. The browser reads the latest received snapshot every five seconds while visible. Kotak's REST quote endpoint rejects these index tokens, so it is not used. The app never substitutes an ETF, future or option premium. If Kotak sends no snapshot outside market hours, the cards stay unavailable and say they are waiting for an index-stream update.
 
@@ -18,11 +18,11 @@ The top market strip displays NIFTY 50 (`nse_cm|26000`) and SENSEX (`bse_cm|1`) 
 
 Consumer key, mobile, UCC and MPIN are saved in `.local/credentials.json`, at the user's request. This file contains plaintext credentials, is excluded from Git, and has Windows file permissions restricted to the desktop user and the editing account. It is never served by the web server. Do not share or commit the `.local` folder. TOTP must be entered each login and is never persisted. The browser receives only a saved-login boolean, not the stored values. Sessions last 30 minutes. Disconnect clears the active broker session, not the saved login. Edit/delete the credentials file locally to update/remove saved credentials.
 
-Loopback-only, single-user application; do not expose it to the internet. Manual trading endpoints require the authenticated session, same-origin requests, an immutable server-side review and explicit confirmation. No automated strategy runs.
+Loopback-only, single-user application; do not expose it to the internet. Trading endpoints require the authenticated session, same-origin requests, an immutable server-side review and explicit confirmation. Automatic management runs only after a separate explicit strategy-policy confirmation.
 
 ## Manual F&O orders
 
-Use **Manual F&O orders** to search NSE/BSE contracts by underlying, type, optional expiry and strike. The ticket includes NIFTY (NSE F&O) and SENSEX (BSE F&O) presets, while still allowing other broker-supported underlyings. Select the exact returned contract. Lot size, expiry, tick size and freeze quantity come from Kotak's scrip master; browser-supplied symbols and quantities are not trusted. This version supports regular DAY limit and stop-limit orders with NRML/MIS, subject to broker eligibility. No market orders, AMO, baskets, automatic splitting, bracket/target strategy or automatic retries.
+Use **Manual F&O orders** to search NSE/BSE contracts by underlying, type, optional expiry and strike. The ticket includes NIFTY (NSE F&O) and SENSEX (BSE F&O) presets, while still allowing other broker-supported underlyings. Select the exact returned contract. Lot size, expiry, tick size and freeze quantity come from Kotak's scrip master; browser-supplied symbols and quantities are not trusted. This version supports regular DAY limit and stop-limit orders with NRML/MIS, subject to broker eligibility. No market orders, SL-M, AMO, baskets, automatic splitting, native bracket/OCO or automatic mutation retries.
 
 1. Search and select the contract; fetch a quote snapshot with bid/ask and broker/fetch timestamps.
 2. Enter side, product, lots, limit and optional trigger. Review calls Kotak margin validation without submitting an order.
@@ -39,6 +39,30 @@ Each confirmation is journalled in `.local/accounts.sqlite3` BEFORE calling Kota
 Ticket charge estimates cover one side at the entered price, assume ₹0 API brokerage on an eligible Trade Free plan, and use the dated NSE schedule below. BSE/unsupported dates show unavailable charges, not zero. Margin availability does not guarantee execution. No real order was sent during development or testing.
 
 API references: https://github.com/Kotak-Neo/kotak-neo-python (installed SDK 3.0.7); static-IP requirement: https://www.kotakneo.com/platform/kotak-neo-trade-api/static-ip-details/
+
+## Managed entry and exits
+
+On a new order ticket, check **Manage this new entry**, enter one target/stop distance per unit (1:1), exit limit offset and optional trailing distance (0 disables trailing), then review. The entry trigger is separate and only activates a stop-limit entry. After Kotak reports terminal entry status, verified filled quantity and a valid average fill price, the app rounds that average to the nearest tradable tick as the common reference, then calculates the target and initial stop the same distance above and below that reference (reversed for sells); it does not guess from the limit or moving quote. If the actual average is between ticks, the rounded reference means actual distances can differ by up to one tick. The resulting average, reference and target/stop appear in managed-strategy status. If Kotak does not provide a valid average fill, management suspends without placing protection; handle the position directly in Kotak. Both the live-account and automatic-policy checkboxes must be checked before **Confirm and arm strategy**. Arming schedules the entry; it does not report it as filled.
+
+`managed.py` owns the persistent state machine. `managed_strategies` and `managed_reviews` are stored in the existing ignored SQLite database. Every automatic placement, modification and cancellation uses the existing `order_intents` journal, with the concrete server-reviewed payload and strategy ID saved before dispatch. Arming explicitly authorizes only the immutable policy's bounded actions. Session tokens and broker tokens are never persisted.
+
+Lifecycle:
+
+1. Start flat with no outstanding orders for this contract/product, a known freeze quantity, verified fee schedule, valid margin, fresh timestamped bid/ask/LTP and the configured IP. Only one strategy can be armed per account.
+2. Submit the reviewed L/SL entry once. A partial entry causes one cancellation of its remainder. Wait for terminal broker status and reconcile the **actual** filled quantity against the net position before creating protection. Fills can still arrive during cancellation; the position is unprotected during this interval.
+3. Round the verified broker average entry fill to the nearest tradable tick as the common reference, then derive and persist equal-distance target/stop levels. Actual average-fill distances may differ by up to one tick when the average is between ticks. Require positive levels and a usable offset before dispatch. Place one opposite-side protective SL order. For a long, its limit is stop minus offset; for a short, stop plus offset. If a threshold is already crossed when protection is prepared, use one bounded L exit instead, priced from executable bid/ask and offset.
+4. Monitor every 5 seconds on the server even if the browser closes. Trail from the best observed executable bid (long) or ask (short), strictly tightening the stop. At the target, convert that **same exit order** to L at fresh bid minus offset (sell) or ask plus offset (buy). The target is a trigger, not a promised fill price. No independent target sibling is placed. Broker rejection of conversion suspends management and is never blindly retried.
+5. Once an exit is triggered, partially filled or converted to L, keep tracking it without chasing price or sending replacement exits. Mark complete only when all exit fills and a flat position agree. A rejected/cancelled exit with remaining quantity suspends management for manual handling.
+
+This is application-managed behavior, not exchange-native OCO or a bracket order. It avoids two independently fillable exits, but cannot enforce reduce-only execution against concurrent external-terminal activity. Keep other trading on that contract out of this workflow. Manual changes in Neo Desk require disarming first.
+
+**Disarm** stops subsequent automatic requests; it neither cancels broker orders nor closes positions. An in-flight request can still complete. Handle any remaining orders directly in Kotak or through the reviewed manual controls. Disarm is terminal for that strategy; a suspended strategy instead offers **Review resume**, followed by explicit confirmation. Resume reconciles broker state and preserves the tightened stop; it never replays an uncertain request.
+
+Restart, logout, the existing 30-minute session expiry, missing/stale quotes (over 15 seconds), unknown broker fields, position mismatches, other orders, rate limits and ambiguous outcomes suspend management. Known pending outcomes are observed for up to 20 seconds, then require reconciliation. Missing broker evidence can block resumption indefinitely. Never delete the journal to bypass this block. No automatic re-arming occurs after restart.
+
+Management is restricted to the same IST date, weekdays 09:15–15:25, and the contract expiry. This is not an exchange-holiday calendar. At the cutoff, it suspends; it does **not** flatten positions or cancel pending entries. DAY orders expire and overnight positions are not automatically protected next session. Limits can remain unfilled after gaps, and target/trailing management stops if the server, session or connection fails. Monitor in Kotak when suspended.
+
+**Current live-entry limitation:** the existing verified fee schedule only covers supported NSE F&O dates through **2026-10-02**. Managed arming fails closed for later dates and BSE charges. Preview remains available. This feature does not extend that fee schedule or claim live-broker validation. All development tests use fakes; no real order is submitted by tests.
 
 ## Separate daily and historical results
 
@@ -89,9 +113,10 @@ Storage: `.local/accounts.sqlite3`, excluded from Git. It stores per-account est
 ```bash
 .venv-web/bin/python -m pip install -r requirements-dev.txt
 .venv-web/bin/python -m unittest discover -s tests -v
-PLAYWRIGHT_BROWSERS_PATH=/mnt/d/Stock_market/.local/browsers .venv-web/bin/python -m playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=.local/browsers .venv-web/bin/python -m playwright install chromium
 .venv-web/bin/python tests/browser_check.py
 .venv-web/bin/python tests/browser_trading_check.py
+.venv-web/bin/python tests/browser_managed_check.py
 ```
 
 Browser checks use mocked data and an isolated browser; they never log into Kotak or read real account data. Live fee estimates still require an authenticated refresh and comparison with the contract note.

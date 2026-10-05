@@ -37,11 +37,15 @@ class DashboardTests(unittest.TestCase):
         return result
 
     def test_private_data_requires_session(self):
+        self.assertEqual(self.request('GET', '/api/managed/status')[0], 401)
         self.assertEqual(self.request('GET', '/api/dashboard')[0], 401)
         self.assertEqual(self.request('GET', '/api/indices')[0], 401)
 
     def test_trading_requires_authentication_and_same_origin(self):
         headers = {'Origin': f'http://127.0.0.1:{self.app.server_port}', 'X-Neo-Request': '1'}
+        for endpoint in ('preview', 'arm', 'resume-preview', 'resume', 'disarm'):
+            self.assertEqual(self.request('POST', '/api/managed/' + endpoint, headers, '{}')[0], 401)
+            self.assertEqual(self.request('POST', '/api/managed/' + endpoint, {}, '{}')[0], 403)
         for endpoint in ('preview', 'confirm', 'configure', 'search', 'quote', 'resolve'):
             self.assertEqual(self.request('POST', '/api/trading/' + endpoint, headers, '{}')[0], 401)
             self.assertEqual(self.request('POST', '/api/trading/' + endpoint, {}, '{}')[0], 403)

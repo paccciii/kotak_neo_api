@@ -4,7 +4,7 @@ This file is the canonical context for Codex and other coding agents working on 
 
 ## Project purpose
 
-Neo Desk is a local, single-user web application for viewing and manually trading Kotak Neo F&O products. It runs on the user's desktop, serves the UI at `http://localhost:8000`, and keeps broker credentials and account data on that computer.
+Neo Desk is a local, single-user web application for viewing and manually trading Kotak Neo F&O products. It runs on the user's desktop, serves the UI at `http://localhost:18765`, and keeps broker credentials and account data on that computer.
 
 The product separates two kinds of P&L:
 
@@ -18,6 +18,7 @@ Net P&L means after trading costs and before personal income tax.
 - `server.py`: standard-library HTTP server, authentication/session boundary, API routing, response filtering, same-origin/loopback enforcement, and integration of portfolio, accounting, and trading modules.
 - `portfolio.py`: Kotak response normalization, current positions/orders, F&O filtering, and authenticated index streaming for NIFTY 50 (`nse_cm|26000`) and SENSEX (`bse_cm|1`).
 - `trading.py`: contract search, quote snapshots, margin review, immutable order reviews, explicit confirmation, placement/modification/cancellation, execution tracking, static-IP checks, position-exit preparation, and SQLite order-intent journalling.
+- `managed.py`, `managed.js`: explicitly armed persistent DAY entry/exit strategies, one broker-held protective exit, virtual target conversion, monotonic trailing, disarm and reviewed resumption. The HTTP server owns the engine and serializes requests and polling.
 - `accounting.py`: daily F&O fee estimates, brokerage settings, statement CSV validation/import, confirmed history, and full-history coverage attestation.
 - `index.html`, `app.js`, `trading.js`: responsive local dashboard and manual order workflow.
 - `tests/`: unit/integration-style tests plus isolated mocked browser checks.
@@ -28,6 +29,7 @@ Implemented user-facing behavior:
 - NIFTY and SENSEX index cards use Kotak's authenticated SFeed index stream. They can remain unavailable until Kotak sends a stream update; do not substitute an ETF, future, option premium, or unrelated public quote.
 - NSE NIFTY F&O and BSE SENSEX F&O contract discovery, with contract metadata sourced from Kotak's scrip master.
 - Manual DAY Limit and Stop-limit orders for NRML/MIS.
+- Optional reviewed managed entries with a single equal-distance target/stop policy derived from Kotak's verified average fill, plus offset/trailing settings, separate automation consent, persistent fill reconciliation and no automatic restart/resubmission. Only one strategy may be armed per account. Broker calls remain mock-only in development.
 - Review, explicit live-account confirmation, server-held immutable payload, idempotency protection, and broker execution tracking.
 - Reviewed modification/cancellation and reviewed opposite-side position exits.
 - A static public IPv4 gate for live submissions, with checks at login and submission.
@@ -41,7 +43,7 @@ Preserve these rules in every change:
 1. Never commit, log, render, or return credentials, MPIN, TOTP, access tokens, session tokens, GitHub tokens, or the contents of `.local/`.
 2. Never save TOTP. Broker tokens remain server-side and in memory only.
 3. Keep the service loopback-only. Reject untrusted Host/Origin requests and require an authenticated local session for private data and trading operations.
-4. No order may be dispatched without a fresh server-side review and a separate explicit confirmation.
+4. Manual orders require a fresh server-side review and separate explicit confirmation. Managed orders require a reviewed immutable policy and separate explicit automation confirmation; each derived action must undergo fresh server-side quote, position, order, margin and IP validation within those approved bounds. Resume also requires a fresh review and confirmation. Never infer live arming from development instructions.
 5. Treat broker acknowledgement as acknowledgement only. Show completion only after the broker reports actual fills.
 6. Journal mutating requests before dispatch. Never automatically retry placement, modification, or cancellation after an ambiguous result.
 7. Use server-sourced contract metadata and quantities. Do not trust browser-supplied symbols, lot sizes, tick sizes, freeze quantities, or reviewed payloads.
@@ -64,7 +66,7 @@ If any secret is pasted into chat or a terminal command, treat it as exposed and
 
 ## Setup on a new computer
 
-The established environment is Windows with the repository at `D:\\Stock_market`, run through WSL as `/mnt/d/Stock_market`.
+The established environment is Windows with the repository at `D:\\Stock_trading`, run through WSL as `/mnt/d/Stock_trading`. Run the service as the normal desktop user; root is unnecessary.
 
 ```bash
 git clone https://github.com/paccciii/kotak_neo_api.git
@@ -74,7 +76,7 @@ python3 -m venv .venv-web
 .venv-web/bin/python server.py
 ```
 
-Open `http://localhost:8000`. Create `.local/credentials.json` through the application's login/setup flow or local setup procedure; never retrieve it from Git. Register and verify the new machine's provider-assigned static public IP in Kotak before enabling live submission.
+Open `http://localhost:18765`. Create `.local/credentials.json` through the application's login/setup flow or local setup procedure; never retrieve it from Git. Register and verify the new machine's provider-assigned static public IP in Kotak before enabling live submission.
 
 For development checks:
 
@@ -84,6 +86,7 @@ For development checks:
 PLAYWRIGHT_BROWSERS_PATH=.local/browsers .venv-web/bin/python -m playwright install chromium
 .venv-web/bin/python tests/browser_check.py
 .venv-web/bin/python tests/browser_trading_check.py
+.venv-web/bin/python tests/browser_managed_check.py
 ```
 
 ## Kotak API constraints currently relied upon
@@ -94,23 +97,26 @@ PLAYWRIGHT_BROWSERS_PATH=.local/browsers .venv-web/bin/python -m playwright inst
 - Current SDK migration guidance removes legacy Cover Order and Bracket Order parameters, including native square-off and trailing-stop fields.
 - A take-profit can be represented by an opposite-side Limit order.
 - A stop-loss can be represented by an opposite-side `SL` or `SL-M` order.
-- Linked take-profit/stop-loss (OCO) and trailing stop-loss require application-managed monitoring and order modification. They are not implemented.
+- Native OCO/bracket orders are unavailable. Managed target/trailing is implemented using a single protective order: target converts that order to a bounded Limit exit, and trailing tightens it via modification. No independently fillable target sibling is created.
 - Fields accepted by a margin-calculation endpoint do not prove that the same fields are accepted for live order placement.
 
 Primary API reference: <https://github.com/Kotak-Neo/kotak-neo-python>
 
 ## Known limitations and next work
 
-The next likely feature is managed exits for F&O positions. Before implementation, design and test a persistent server-side state machine with these properties:
+Managed exits use `managed_strategies` and `managed_reviews` in the existing SQLite store, plus the existing `order_intents` journal for every derived mutation. Preserve these implementation rules:
 
-- Wait for verified entry fills and use actual filled quantity.
-- Create and track profit-target and stop-loss exits without accidentally opening a reverse position.
-- When one exit fills, cancel the sibling and verify cancellation/fill outcomes.
-- Reconcile partial fills, app restarts, expired sessions, stale/missing quotes, market gaps, manual broker-terminal activity, rejected modifications, rate limits, network timeouts, and ambiguous broker responses.
-- Persist strategy state and broker IDs before mutation, following the existing journal-first/no-blind-retry model.
-- Make automation explicitly opt-in with visible armed/disarmed state and a reliable manual stop control.
-- Add `SL-M` separately if desired; evaluate slippage risk and broker/exchange eligibility.
-- Implement trailing stop-loss by monotonically adjusting a protective order through reviewed broker state. Never loosen the stop automatically.
+- New managed entries require a flat position, no outstanding same-contract/product order and a known freeze quantity. Only one strategy may be armed per account.
+- Partial entry fills cause a single cancellation of the unfilled remainder; wait for terminal entry state and actual filled quantity before placing one protective exit. Explicitly disclose the interim unprotected exposure.
+- Round the terminal entry order's verified average fill to the nearest tradable tick as the common reference, derive equal-distance target/stop levels around it (long: reference ± distance; short: reference ∓ distance), and persist before dispatch. When average fill is between ticks, actual distances may differ by up to one tick. Require a valid average and positive tick-aligned exit levels; never substitute the entered limit or a moving quote. Suspend without placing protection if the average fill cannot be verified. Legacy strategies retain their stored absolute levels; pre-upgrade unarmed reviews must be reviewed again.
+- Target is virtual and converts that same protective order to a bounded L exit at fresh bid minus offset / ask plus offset. No sibling exists to race with it. Broker modification rejection/ambiguity suspends; never retry it blindly.
+- Trailing tightens from the best observed executable price, persisted in SQLite. Never loosen the protective trigger; do not modify an already triggered/partially filled exit or automatically chase an unfilled L exit.
+- Completion requires matching entry/exit fills and a flat broker position. Detect unknown fields, regressing fills, other active orders and external changes; suspend for reconciliation. There is no broker-enforced reduce-only guarantee against concurrent external activity.
+- Disarm stops management but leaves broker orders/positions untouched; an already sent request may finish. Disarmed strategies cannot resume. Suspended strategies need fresh reviewed resumption. A process-local authorization set prevents automatic restart even if persisted armed state survived a crash.
+- Run the engine on the server owner thread, outside browser polling; keep requests serialized. A broker call can delay disarm processing until the call returns. Journal before mutation, do not log SDK exceptions or tokens, and never run a live order during testing.
+- Management requires same-day valid authentication, matching public IP, fresh broker timestamps (15 seconds), bid/ask/LTP, known margin and contract data. Stop automated management outside weekdays 09:15–15:25 IST; no automatic end-of-day flattening, holiday calendar or overnight protection exists.
+- New managed arming is blocked for unknown fees. The current NSE fee schedule ends 2026-10-02, so later dates and unsupported BSE charges require independent verification before live arming can work. Do not silently extend the schedule.
+- Future work: independent broker/UAT validation of SL-to-L conversion eligibility, verified fee-schedule maintenance, robust exchange calendar and explicitly designed overnight/session-renewal handling. SL-M remains separate and unimplemented.
 
 Do not describe these managed exits as exchange-native OCO/bracket orders. The server must remain alive and authenticated for application-managed trailing behavior, and a crash or connectivity loss can interrupt management.
 

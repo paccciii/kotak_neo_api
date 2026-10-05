@@ -9,9 +9,11 @@ from pathlib import Path
 from portfolio import dashboard, IndexFeed
 import accounting
 import trading
+import managed
 
 ROOT = Path(__file__).parent
 TTL = 1800
+PORT = 18765
 
 
 def saved_credentials():
@@ -54,6 +56,12 @@ class App(HTTPServer):
         super().__init__(*args, **kwargs)
         self.contracts = {}
         self.index_feed = IndexFeed()
+        self.manager = managed.Manager()
+
+    def service_actions(self):
+        if self.client and time.monotonic() > self.expires:
+            self.disconnect()
+        self.manager.tick(self)
 
     def get_request(self):
         connection, address = super().get_request()
@@ -61,6 +69,8 @@ class App(HTTPServer):
         return connection, address
 
     def disconnect(self):
+        managed.pause_account(self.account, self.manager.authorized,
+                              'Management suspended after disconnect/session expiry. Broker orders remain active; review and resume after login.')
         client, self.client = self.client, None
         self.index_feed.stop()
         self.session = None
@@ -114,7 +124,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(403, {'error': 'Local access only.'})
         if self.path == '/':
             return self.reply(200, (ROOT / 'index.html').read_bytes(), html=True)
-        if self.path in ('/app.js', '/trading.js'):
+        if self.path in ('/app.js', '/trading.js', '/managed.js'):
             body = (ROOT / self.path[1:]).read_bytes()
             self.send_response(200)
             self.send_header('Content-Type', 'text/javascript; charset=utf-8')
@@ -138,6 +148,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authenticated():
                 return self.reply(401, {'error': 'Please connect your account again.'})
             return self.reply(200, self.server.index_feed.snapshot())
+        if self.path == '/api/managed/status':
+            if not self.authenticated():
+                return self.reply(401, {'error': 'Please connect your account again.'})
+            return self.reply(200, managed.status(self.server.account))
         if self.path == '/api/history':
             if not self.authenticated():
                 return self.reply(401, {'error': 'Please connect your account again.'})
@@ -164,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin')
         if not self.valid_host() or origin != 'http://' + self.headers.get('Host', '') or self.headers.get('X-Neo-Request') != '1':
             return self.reply(403, {'error': 'Request origin rejected.'})
-        if self.path.startswith('/api/trading/'):
+        if self.path.startswith(('/api/trading/', '/api/managed/')):
             if not self.authenticated():
                 return self.reply(401, {'error': 'Please connect your account again.'})
             try:
@@ -176,7 +190,22 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Invalid request.')
                 action = self.path.rsplit('/', 1)[-1]
                 client = self.server.client
-                if action == 'configure':
+                if self.path.startswith('/api/managed/'):
+                    args = (client, self.server.account, self.server.session)
+                    if action == 'preview':
+                        c = self.server.contracts.get(body.get('contract_id'))
+                        if not c:
+                            raise ValueError('Search and select a broker-verified contract first.')
+                        result = managed.preview(*args, body, c)
+                    elif action in ('arm', 'resume'):
+                        result = getattr(managed, action)(*args, body, self.server.login_ip, self.server.manager.authorized)
+                    elif action == 'resume-preview':
+                        result = managed.resume_preview(*args, str(body.get('strategy_id', '')))
+                    elif action == 'disarm':
+                        result = managed.disarm(self.server.account, str(body.get('strategy_id', '')), self.server.manager.authorized)
+                    else:
+                        return self.reply(404, {'error': 'Not found.'})
+                elif action == 'configure':
                     result = trading.configure(body)
                 elif action == 'search':
                     result = {'contracts': trading.search(client, body)}
@@ -291,14 +320,13 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     logging.disable(logging.CRITICAL)
-    app = App(('127.0.0.1', 8000), Handler)
+    app = App(('127.0.0.1', PORT), Handler)
     app.timeout = 1
-    print('Neo Desk: http://localhost:8000 — Ctrl+C to stop', flush=True)
+    print(f'Neo Desk: http://localhost:{PORT} — Ctrl+C to stop', flush=True)
     try:
         while True:
             app.handle_request()
-            if app.client and time.monotonic() > app.expires:
-                app.disconnect()
+            app.service_actions()
     except KeyboardInterrupt:
         pass
     finally:
